@@ -42,11 +42,13 @@
 #include "core/symbols/symbol.h"
 #include "fileformats/file_import_export.h"
 
+class QColor;
 class QPointF;
 
 namespace OpenOrienteering {
 
 class AreaSymbol;
+class CombinedSymbol;
 class Georeferencing;
 class LatLon;
 class LineSymbol;
@@ -306,7 +308,15 @@ protected:
 	Symbol* getSymbol(Symbol::Type type, const char* raw_style_string);
 	
 	MapColor* makeColor(OGRStyleToolH tool, const char* color_string);
-	
+
+	/**
+	 * Creates (or reuses) a MapColor from an RGB color and an opacity value.
+	 *
+	 * This is used for the simplestyle-spec import, where colors and opacities
+	 * are given as feature properties rather than in an OGR style string.
+	 */
+	MapColor* makeColor(const QColor& rgb, double opacity);
+
 	void applyPenColor(OGRStyleToolH tool, LineSymbol* line_symbol);
 	
 	void applyBrushColor(OGRStyleToolH tool, AreaSymbol* area_symbol);
@@ -342,7 +352,23 @@ private:
 	TextSymbol* getSymbolForLabel(OGRStyleToolH tool, const QByteArray& style_string);
 	LineSymbol* getSymbolForPen(OGRStyleToolH tool, const QByteArray& style_string);
 	AreaSymbol* getSymbolForBrush(OGRStyleToolH tool, const QByteArray& style_string);
-	
+
+	/**
+	 * Returns a symbol based on the simplestyle-spec properties of the feature.
+	 *
+	 * simplestyle-spec (https://github.com/mapbox/simplestyle-spec) describes
+	 * styling via GeoJSON feature properties such as "stroke", "fill" and
+	 * "marker-color". GDAL does not translate these into OGR style strings, so
+	 * they are handled explicitly here. Returns nullptr if the feature carries
+	 * no relevant property, so that the caller can fall back to the default
+	 * symbols.
+	 */
+	Symbol* getSimpleStyleSymbol(Symbol::Type type, OGRFeatureH feature);
+	PointSymbol* getSimpleStylePointSymbol(OGRFeatureH feature);
+	LineSymbol* getSimpleStyleLineSymbol(OGRFeatureH feature);
+	Symbol* getSimpleStyleAreaSymbol(OGRFeatureH feature);
+	LineSymbol* makeSimpleStyleLine(const QString& stroke, const QString& stroke_width, const QString& stroke_opacity);
+
 	QByteArray driver_name;
 	
 	QHash<QByteArray, Symbol*> point_symbols;
@@ -353,6 +379,7 @@ private:
 	LineSymbol* default_line_symbol;
 	QHash<QByteArray, Symbol*> area_symbols;
 	AreaSymbol* default_area_symbol;
+	QHash<QByteArray, Symbol*> simple_style_symbols;
 	QHash<QByteArray, MapColor*> colors;
 	MapColor* default_pen_color;
 	
@@ -373,9 +400,10 @@ private:
 	int too_few_coordinates = 0;
 	
 	UnitType unit_type;
-	
+
 	bool georeferencing_import_enabled = true;
 	bool clip_layers;
+	bool use_simple_style = false;
 };
 
 

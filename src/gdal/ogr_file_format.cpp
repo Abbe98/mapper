@@ -604,8 +604,75 @@ namespace {
 		BooleanTool tool;
 		PathObject path;
 	};
-	
-	
+
+
+	// simplestyle-spec (https://github.com/mapbox/simplestyle-spec) default values
+	constexpr auto simple_style_default_color            = "#555555";  // stroke and fill
+	constexpr double simple_style_default_stroke_width   = 2.0;
+	constexpr double simple_style_default_stroke_opacity = 1.0;
+	constexpr double simple_style_default_fill_opacity   = 0.6;
+
+	/**
+	 * Reads a feature property (OGR field) as a string, or an empty string when
+	 * the field is absent.
+	 */
+	QString simpleStyleField(OGRFeatureH feature, const char* name)
+	{
+		auto const index = OGR_F_GetFieldIndex(feature, name);
+		if (index < 0)
+			return {};
+		return QString::fromUtf8(OGR_F_GetFieldAsString(feature, index));
+	}
+
+	/**
+	 * Parses a simplestyle-spec color value into a QColor.
+	 *
+	 * The value may or may not carry a leading '#', and may use the 3- or
+	 * 6-digit hex notation. Returns an invalid QColor when the value cannot be
+	 * parsed.
+	 */
+	QColor simpleStyleColor(const QString& spec)
+	{
+		if (spec.isEmpty())
+			return {};
+		auto value = spec.trimmed();
+		if (!value.startsWith(QLatin1Char('#')))
+			value.prepend(QLatin1Char('#'));
+		return QColor(value);
+	}
+
+	/**
+	 * Parses a simplestyle-spec opacity value (0.0 to 1.0), falling back to the
+	 * given default when the value is missing or invalid.
+	 */
+	double simpleStyleOpacity(const QString& spec, double fallback)
+	{
+		if (spec.isEmpty())
+			return fallback;
+		bool ok = false;
+		auto const value = spec.toDouble(&ok);
+		return ok ? qBound(0.0, value, 1.0) : fallback;
+	}
+
+	/**
+	 * Parses a simplestyle-spec stroke width and converts it to millimeters.
+	 *
+	 * The spec expresses stroke widths in (screen) pixels. They are converted to
+	 * millimeters using the CSS reference of 96 pixels per inch.
+	 */
+	double simpleStyleWidthMM(const QString& spec, double fallback)
+	{
+		auto width_px = fallback;
+		if (!spec.isEmpty())
+		{
+			bool ok = false;
+			auto const value = spec.toDouble(&ok);
+			if (ok && value >= 0.0)
+				width_px = value;
+		}
+		return width_px * 25.4 / 96.0;
+	}
+
 }  // namespace
 
 
@@ -824,6 +891,11 @@ bool OgrFileImport::importImplementation()
 			map->setSymbolSetId(QString::fromLatin1(driver_name));
 		}
 	}
+
+	// The simplestyle-spec applies to GeoJSON (and its variants).
+	use_simple_style = driver_name == "GeoJSON"
+	                   || driver_name == "GeoJSONSeq"
+	                   || driver_name == "TopoJSON";
 	
 	empty_geometries = 0;
 	no_transformation = 0;
@@ -1168,8 +1240,11 @@ OgrFileImport::ObjectList OgrFileImport::importGeometryCollection(OGRFeatureH fe
 
 Object* OgrFileImport::importPointGeometry(OGRFeatureH feature, OGRGeometryH geometry)
 {
-	auto style = OGR_F_GetStyleString(feature);
-	auto symbol = getSymbol(Symbol::Point, style);
+	Symbol* symbol = nullptr;
+	if (use_simple_style)
+		symbol = getSimpleStyleSymbol(Symbol::Point, feature);
+	if (!symbol)
+		symbol = getSymbol(Symbol::Point, OGR_F_GetStyleString(feature));
 	if (symbol->getType() == Symbol::Point)
 	{
 		auto object = new PointObject(symbol);
@@ -1241,8 +1316,12 @@ PathObject* OgrFileImport::importLineStringGeometry(OGRFeatureH feature, OGRGeom
 		return nullptr;
 	}
 	
-	auto style = OGR_F_GetStyleString(feature);
-	auto object = new PathObject(getSymbol(Symbol::Line, style));
+	Symbol* symbol = nullptr;
+	if (use_simple_style)
+		symbol = getSimpleStyleSymbol(Symbol::Line, feature);
+	if (!symbol)
+		symbol = getSymbol(Symbol::Line, OGR_F_GetStyleString(feature));
+	auto object = new PathObject(symbol);
 	for (int i = 0; i < num_points; ++i)
 	{
 		object->addCoordinate(toMapCoord(OGR_G_GetX(geometry, i), OGR_G_GetY(geometry, i)));
@@ -1273,8 +1352,12 @@ PathObject* OgrFileImport::importPolygonGeometry(OGRFeatureH feature, OGRGeometr
 		return nullptr;
 	}
 	
-	auto style = OGR_F_GetStyleString(feature);
-	auto object = new PathObject(getSymbol(Symbol::Area, style));
+	Symbol* symbol = nullptr;
+	if (use_simple_style)
+		symbol = getSimpleStyleSymbol(Symbol::Area, feature);
+	if (!symbol)
+		symbol = getSymbol(Symbol::Area, OGR_F_GetStyleString(feature));
+	auto object = new PathObject(symbol);
 	for (int i = 0; i < num_points; ++i)
 	{
 		object->addCoordinate(toMapCoord(OGR_G_GetX(outline, i), OGR_G_GetY(outline, i)));
@@ -1426,7 +1509,29 @@ MapColor* OgrFileImport::makeColor(OGRStyleToolH tool, const char* color_string)
 		key.detach();
 		colors.insert(key, color);
 	}
-	
+
+	return color;
+}
+
+MapColor* OgrFileImport::makeColor(const QColor& rgb, double opacity)
+{
+	auto key = rgb.name(QColor::HexRgb).toLatin1();
+	key += ':';
+	key += QByteArray::number(opacity, 'f', 3);
+	auto color = colors.value(key);
+	if (!color)
+	{
+		auto name = rgb.name(QColor::HexRgb);
+		if (opacity < 1.0)
+			name += QStringLiteral(" %1%").arg(qRound(opacity * 100));
+		color = new MapColor(name, map->getNumColors());
+		color->setRgb(rgb);
+		color->setCmykFromRgb();
+		if (opacity < 1.0)
+			color->setOpacity(float(opacity));
+		map->addColor(color, map->getNumColors());
+		colors.insert(key, color);
+	}
 	return color;
 }
 
@@ -1755,6 +1860,124 @@ AreaSymbol* OgrFileImport::getSymbolForBrush(OGRStyleToolH tool, const QByteArra
 	auto s = area_symbol.get();
 	map->addSymbol(area_symbol.release(), map->getNumSymbols());
 	return s;
+}
+
+
+Symbol* OgrFileImport::getSimpleStyleSymbol(Symbol::Type type, OGRFeatureH feature)
+{
+	switch (type)
+	{
+	case Symbol::Point:
+		return getSimpleStylePointSymbol(feature);
+	case Symbol::Line:
+		return getSimpleStyleLineSymbol(feature);
+	case Symbol::Area:
+		return getSimpleStyleAreaSymbol(feature);
+	default:
+		return nullptr;
+	}
+}
+
+PointSymbol* OgrFileImport::getSimpleStylePointSymbol(OGRFeatureH feature)
+{
+	// The marker-symbol and marker-size properties (the icon) are not supported.
+	auto const marker_color = simpleStyleField(feature, "marker-color");
+	auto const rgb = simpleStyleColor(marker_color);
+	if (!rgb.isValid())
+		return nullptr;
+
+	auto const key = QByteArray("simplestyle:point:") + marker_color.toUtf8();
+	if (auto* cached = simple_style_symbols.value(key))
+		return static_cast<PointSymbol*>(cached);
+
+	auto point_symbol = duplicate<PointSymbol>(*default_point_symbol);
+	point_symbol->setInnerColor(makeColor(rgb, 1.0));
+	point_symbol->setName(default_point_symbol->getName() + QLatin1Char(' ') + rgb.name(QColor::HexRgb));
+
+	auto* ret = point_symbol.get();
+	simple_style_symbols.insert(key, ret);
+	map->addSymbol(point_symbol.release(), map->getNumSymbols());
+	return ret;
+}
+
+LineSymbol* OgrFileImport::getSimpleStyleLineSymbol(OGRFeatureH feature)
+{
+	auto const stroke = simpleStyleField(feature, "stroke");
+	auto const stroke_width = simpleStyleField(feature, "stroke-width");
+	auto const stroke_opacity = simpleStyleField(feature, "stroke-opacity");
+	if (stroke.isEmpty() && stroke_width.isEmpty() && stroke_opacity.isEmpty())
+		return nullptr;
+
+	return makeSimpleStyleLine(stroke, stroke_width, stroke_opacity);
+}
+
+LineSymbol* OgrFileImport::makeSimpleStyleLine(const QString& stroke, const QString& stroke_width, const QString& stroke_opacity)
+{
+	auto const key = QByteArray("simplestyle:line:") + stroke.toUtf8()
+	                 + '|' + stroke_width.toUtf8() + '|' + stroke_opacity.toUtf8();
+	if (auto* cached = simple_style_symbols.value(key))
+		return static_cast<LineSymbol*>(cached);
+
+	auto rgb = simpleStyleColor(stroke);
+	if (!rgb.isValid())
+		rgb = simpleStyleColor(QString::fromLatin1(simple_style_default_color));
+	auto const opacity = simpleStyleOpacity(stroke_opacity, simple_style_default_stroke_opacity);
+	auto const width_mm = simpleStyleWidthMM(stroke_width, simple_style_default_stroke_width);
+
+	auto line_symbol = duplicate<LineSymbol>(*default_line_symbol);
+	line_symbol->setColor(makeColor(rgb, opacity));
+	line_symbol->setLineWidth(width_mm);
+	line_symbol->setName(default_line_symbol->getName() + QLatin1Char(' ') + rgb.name(QColor::HexRgb));
+
+	auto* ret = line_symbol.get();
+	simple_style_symbols.insert(key, ret);
+	map->addSymbol(line_symbol.release(), map->getNumSymbols());
+	return ret;
+}
+
+Symbol* OgrFileImport::getSimpleStyleAreaSymbol(OGRFeatureH feature)
+{
+	auto const fill = simpleStyleField(feature, "fill");
+	auto const fill_opacity = simpleStyleField(feature, "fill-opacity");
+	auto const stroke = simpleStyleField(feature, "stroke");
+	auto const stroke_width = simpleStyleField(feature, "stroke-width");
+	auto const stroke_opacity = simpleStyleField(feature, "stroke-opacity");
+	if (fill.isEmpty() && fill_opacity.isEmpty()
+	    && stroke.isEmpty() && stroke_width.isEmpty() && stroke_opacity.isEmpty())
+		return nullptr;
+
+	auto const key = QByteArray("simplestyle:area:") + fill.toUtf8() + '|' + fill_opacity.toUtf8()
+	                 + '|' + stroke.toUtf8() + '|' + stroke_width.toUtf8() + '|' + stroke_opacity.toUtf8();
+	if (auto* cached = simple_style_symbols.value(key))
+		return cached;
+
+	// The polygon fill.
+	auto fill_rgb = simpleStyleColor(fill);
+	if (!fill_rgb.isValid())
+		fill_rgb = simpleStyleColor(QString::fromLatin1(simple_style_default_color));
+	auto const fill_op = simpleStyleOpacity(fill_opacity, simple_style_default_fill_opacity);
+
+	auto area_symbol = duplicate<AreaSymbol>(*default_area_symbol);
+	area_symbol->setColor(makeColor(fill_rgb, fill_op));
+	area_symbol->setName(default_area_symbol->getName() + QLatin1Char(' ') + fill_rgb.name(QColor::HexRgb));
+	auto* area_ptr = area_symbol.get();
+	map->addSymbol(area_symbol.release(), map->getNumSymbols());
+
+	// Per spec, a polygon always has an outline (the stroke properties default
+	// to a grey line). Combine the fill and the outline into a single symbol.
+	auto* line_ptr = makeSimpleStyleLine(stroke, stroke_width, stroke_opacity);
+
+	auto combined = std::unique_ptr<CombinedSymbol>(new CombinedSymbol());
+	combined->setNumParts(2);
+	combined->setPart(0, area_ptr, false);
+	combined->setPart(1, line_ptr, false);
+	combined->setNumberComponent(0, default_area_symbol->getNumberComponent(0));
+	combined->setName(area_ptr->getName());
+
+	auto* ret = combined.get();
+	simple_style_symbols.insert(key, ret);
+	map->addSymbol(combined.release(), map->getNumSymbols());
+	return ret;
 }
 
 

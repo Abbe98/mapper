@@ -33,6 +33,30 @@ Please note that some of the raster formats listed below are not used for
 images but for actual geospatial metrics meant for algorithmic processing.
 
 
+## Styling GeoJSON with simplestyle-spec
+
+When importing GeoJSON data, Mapper honours the
+[simplestyle-spec](https://github.com/mapbox/simplestyle-spec).
+Styling information carried in the feature properties is used to create
+matching symbols instead of falling back to the generic default symbols.
+
+The following properties are supported:
+
+| Property | Applies to | Effect |
+|----------|------------|--------|
+| `stroke` | lines, polygons | Colour of the line (outline). |
+| `stroke-width` | lines, polygons | Width of the line, interpreted in pixels (96 dpi). |
+| `stroke-opacity` | lines, polygons | Opacity of the line, from 0 to 1. |
+| `fill` | polygons | Colour of the polygon interior. |
+| `fill-opacity` | polygons | Opacity of the polygon interior, from 0 to 1. |
+| `marker-color` | points | Colour of the point. |
+
+Polygons are imported as a combined symbol which draws both the filled
+interior and the outline.
+The `marker-symbol` and `marker-size` (icon) properties as well as `title`
+and `description` are ignored.
+
+
 ## GDAL drivers offered by OpenOrienteering Mapper
 
 The following list is valid for the official Android, macOS and Windows releases
