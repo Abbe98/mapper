@@ -35,7 +35,9 @@ class QAction;
 class QBoxLayout;
 class QCheckBox;
 class QEvent;
+class QLineEdit;
 class QModelIndex;
+class QSortFilterProxyModel;
 class QTableView;
 class QToolButton;
 class QVariant;
@@ -81,6 +83,20 @@ protected:
 	QVariant data(int row, int column, int role) const;
 	void setData(int row, int column, QVariant value, int role);
 	Qt::ItemFlags flags(int row, int column) const;
+	
+	/**
+	 * Returns the row in the template model for the given index of the view.
+	 * 
+	 * Returns -1 if the index is not valid.
+	 */
+	int sourceRow(const QModelIndex& view_index) const;
+	
+	/**
+	 * Returns the index of the view for the given row of the template model.
+	 * 
+	 * Returns an invalid index if the row is hidden by the search filter.
+	 */
+	QModelIndex viewIndex(int row, int column) const;
 	
 	int currentRow() const;
 	int posFromRow(int row) const;
@@ -153,6 +169,8 @@ private:
 	int last_row = -1;
 	
 	QCheckBox* all_hidden_check;
+	QLineEdit* search_field;
+	QSortFilterProxyModel* template_proxy;
 	QTableView* template_table;
 	QBoxLayout* all_templates_layout;
 	

@@ -49,6 +49,7 @@
 #include <QLabel>
 #include <QLatin1Char>
 #include <QLatin1String>
+#include <QLineEdit>
 #include <QList>
 #include <QLocale>
 #include <QMenu>
@@ -61,6 +62,7 @@
 #include <QSettings>
 #include <QSize>
 #include <QSlider>
+#include <QSortFilterProxyModel>
 #include <QStringList>
 #include <QStyle>
 #include <QStyleOption>
@@ -123,6 +125,29 @@ QVariant makeCheckBoxDecorator(QStyle* style, const QSize& size)
 	return pixmap;
 }
 
+/**
+ * A proxy model which filters the template list by the templates' filenames.
+ * 
+ * The row representing the map is never filtered out: it separates the
+ * templates drawn in front of the map from the ones drawn behind it, and so
+ * it is needed to make sense of the remaining rows.
+ */
+class TemplateFilterProxyModel : public QSortFilterProxyModel
+{
+public:
+	using QSortFilterProxyModel::QSortFilterProxyModel;
+	
+protected:
+	bool filterAcceptsRow(int source_row, const QModelIndex& source_parent) const override
+	{
+		// This proxy model is used with TemplateTableModel only.
+		auto const* source_model = static_cast<const TemplateTableModel*>(sourceModel());
+		if (source_model->posFromRow(source_row) < 0)
+			return true;  // the map row
+		return QSortFilterProxyModel::filterAcceptsRow(source_row, source_parent);
+	}
+};
+
 /// Local wrapper for Util::ToolButton::create() adding the What's This bit.
 QToolButton* createToolButton(const QIcon& icon, const QString& text)
 {
@@ -179,8 +204,14 @@ TemplateListWidget::TemplateListWidget(Map& map, MapView& main_view, MapEditorCo
 	
 	// Template table
 	auto* template_model = new TemplateTableModel(map, main_view, this);
+	template_proxy = new TemplateFilterProxyModel(this);
+	template_proxy->setSourceModel(template_model);
+	template_proxy->setDynamicSortFilter(true);
+	template_proxy->setFilterCaseSensitivity(Qt::CaseInsensitive);
+	template_proxy->setFilterKeyColumn(TemplateTableModel::nameColumn());
+	
 	template_table = new QTableView();
-	template_table->setModel(template_model);
+	template_table->setModel(template_proxy);
 	
 	QScroller::grabGesture(template_table->viewport(), QScroller::TouchGesture);
 	template_table->installEventFilter(this);
@@ -193,7 +224,14 @@ TemplateListWidget::TemplateListWidget(Map& map, MapView& main_view, MapEditorCo
 	template_table->hideColumn(TemplateTableModel::groupColumn());
 #endif
 	connect(template_model, &TemplateTableModel::rowsInserted, this, [this](const QModelIndex& /*unused*/, int first) {
-		template_table->selectRow(first);
+		auto view_index = viewIndex(first, 0);
+		if (!view_index.isValid())
+		{
+			// Don't let the search filter hide a template which was just added.
+			search_field->clear();
+			view_index = viewIndex(first, 0);
+		}
+		template_table->selectRow(view_index.row());
 	});
 	
 	auto* percentage_delegate = new PercentageDelegate(this, 5);
@@ -229,9 +267,27 @@ TemplateListWidget::TemplateListWidget(Map& map, MapView& main_view, MapEditorCo
 			template_model->setCheckBoxDecorator(makeCheckBoxDecorator(style(), header_check_size));
 	}
 	
+	// Search field for filtering the templates by filename
+	search_field = new QLineEdit();
+	search_field->setClearButtonEnabled(true);
+	search_field->setPlaceholderText(tr("Search by filename"));
+	search_field->setToolTip(tr("Show only templates whose filename contains this text"));
+	
+	// Wrap the search field in a widget and layout to force a margin.
+	auto* search_widget = new QWidget();
+	auto* search_layout = new QHBoxLayout(search_widget);
+	search_layout->addWidget(search_field);
+	search_layout->setContentsMargins(
+	            style()->pixelMetric(QStyle::PM_LayoutLeftMargin, &style_option) / 2,
+	            0, // Covered by the main layout's spacing.
+	            style()->pixelMetric(QStyle::PM_LayoutRightMargin, &style_option) / 2,
+	            0 // Covered by the main layout's spacing.
+	);
+	
 	all_templates_layout = new QVBoxLayout();
 	all_templates_layout->setMargin(0);
 	all_templates_layout->addWidget(top_bar_widget);
+	all_templates_layout->addWidget(search_widget);
 	all_templates_layout->addWidget(template_table, 1);
 	
 	auto* new_button_menu = new QMenu(this);
@@ -347,9 +403,12 @@ TemplateListWidget::TemplateListWidget(Map& map, MapView& main_view, MapEditorCo
 	// Connections
 	connect(all_hidden_check, &QAbstractButton::toggled, &controller, &MapEditorController::hideAllTemplates);
 	
+	connect(search_field, &QLineEdit::textChanged, template_proxy, &QSortFilterProxyModel::setFilterFixedString);
+	connect(search_field, &QLineEdit::textChanged, this, &TemplateListWidget::setButtonsDirty);
+	
 	connect(template_table->selectionModel(), &QItemSelectionModel::currentRowChanged, this, &TemplateListWidget::setButtonsDirty);
-	connect(template_table->model(), &QAbstractTableModel::rowsMoved, this, &TemplateListWidget::setButtonsDirty);
-	connect(template_table->model(), &QAbstractTableModel::dataChanged, this, &TemplateListWidget::setButtonsDirty);
+	connect(template_model, &QAbstractTableModel::rowsMoved, this, &TemplateListWidget::setButtonsDirty);
+	connect(template_model, &QAbstractTableModel::dataChanged, this, &TemplateListWidget::setButtonsDirty);
 	connect(template_table, &QTableView::clicked, this, &TemplateListWidget::itemClicked, Qt::QueuedConnection);
 	connect(template_table, &QTableView::doubleClicked, this, &TemplateListWidget::itemDoubleClicked, Qt::QueuedConnection);
 	
@@ -373,30 +432,42 @@ TemplateListWidget::TemplateListWidget(Map& map, MapView& main_view, MapEditorCo
 inline
 TemplateTableModel* TemplateListWidget::model()
 {
-	return qobject_cast<TemplateTableModel*>(template_table->model());
+	return qobject_cast<TemplateTableModel*>(template_proxy->sourceModel());
 }
 
 QVariant TemplateListWidget::data(int row, int column, int role) const
 {
-	return template_table->model()->data(template_table->model()->index(row, column), role);
+	return model()->data(model()->index(row, column), role);
 }
 
 void TemplateListWidget::setData(int row, int column, QVariant value, int role)
 {
-	template_table->model()->setData(template_table->model()->index(row, column), value, role);
+	model()->setData(model()->index(row, column), value, role);
 }
 
 Qt::ItemFlags TemplateListWidget::flags(int row, int column) const
 {
-	return template_table->model()->flags(template_table->model()->index(row, column));
+	return model()->flags(model()->index(row, column));
 }
 
 
 
 inline
+int TemplateListWidget::sourceRow(const QModelIndex& view_index) const
+{
+	return template_proxy->mapToSource(view_index).row();
+}
+
+inline
+QModelIndex TemplateListWidget::viewIndex(int row, int column) const
+{
+	return template_proxy->mapFromSource(model()->index(row, column));
+}
+
+inline
 int TemplateListWidget::currentRow() const
 {
-	return template_table->currentIndex().row();
+	return sourceRow(template_table->currentIndex());
 }
 
 inline
@@ -460,9 +531,12 @@ void TemplateListWidget::updateButtons()
 {
 	buttons_dirty = false;
 	
+	// Reordering requires the full list: rows hidden by the search filter
+	// would silently take part in it.
+	auto const search_active = !search_field->text().isEmpty();
 	auto const current_row = currentRow();
-	move_up_button->setEnabled(current_row > 0);
-	move_down_button->setEnabled(current_row >= 0 && current_row < model()->rowCount() - 1);
+	move_up_button->setEnabled(!search_active && current_row > 0);
+	move_down_button->setEnabled(!search_active && current_row >= 0 && current_row < model()->rowCount() - 1);
 	
 	auto* temp = currentTemplate();
 	duplicate_action->setEnabled(bool(temp));
@@ -525,7 +599,7 @@ void TemplateListWidget::updateButtons()
 
 void TemplateListWidget::itemClicked(const QModelIndex& index)
 {
-	auto const row = index.row();
+	auto const row = sourceRow(index);
 	auto const pos = posFromRow(qMax(0, row));
 	
 	switch (index.column())
@@ -555,7 +629,7 @@ void TemplateListWidget::itemClicked(const QModelIndex& index)
 
 void TemplateListWidget::itemDoubleClicked(const QModelIndex& index)
 {
-	auto const row = index.row();
+	auto const row = sourceRow(index);
 	auto const pos = posFromRow(qMax(0, row));
 	
 	switch (index.column())
@@ -603,7 +677,7 @@ bool TemplateListWidget::eventFilter(QObject* watched, QEvent* event)
 #ifdef Q_OS_ANDROID
 		case QEvent::Show:
 			{
-				auto map_row = rowFromPos(map.getFirstFrontTemplate()) + 1;
+				auto map_row = viewIndex(rowFromPos(map.getFirstFrontTemplate()) + 1, 0).row();
 				template_table->resizeRowToContents(map_row);
 				template_table->verticalHeader()->setDefaultSectionSize(template_table->verticalHeader()->sectionSize(map_row));
 			}
@@ -752,7 +826,7 @@ void TemplateListWidget::moveTemplateUp()
 		map.moveTemplate(cur_pos, above_pos);
 	}
 	
-	template_table->setCurrentIndex(template_table->model()->index(row - 1, template_table->selectionModel()->currentIndex().column()));
+	template_table->setCurrentIndex(viewIndex(row - 1, template_table->currentIndex().column()));
 }
 
 void TemplateListWidget::moveTemplateDown()
@@ -760,8 +834,8 @@ void TemplateListWidget::moveTemplateDown()
 	int row = currentRow();
 	Q_ASSERT(row >= 0);
 	if (!(row >= 0)) return; // in release mode
-	Q_ASSERT(row < template_table->model()->rowCount() - 1);
-	if (!(row < template_table->model()->rowCount() - 1)) return; // in release mode
+	Q_ASSERT(row < model()->rowCount() - 1);
+	if (!(row < model()->rowCount() - 1)) return; // in release mode
 	
 	int cur_pos = posFromRow(row);
 	int below_pos = posFromRow(row + 1);
@@ -782,7 +856,7 @@ void TemplateListWidget::moveTemplateDown()
 		map.moveTemplate(cur_pos, below_pos);
 	}
 	
-	template_table->setCurrentIndex(template_table->model()->index(row + 1, template_table->selectionModel()->currentIndex().column()));
+	template_table->setCurrentIndex(viewIndex(row + 1, template_table->currentIndex().column()));
 }
 
 void TemplateListWidget::showHelp()
@@ -1013,7 +1087,7 @@ void TemplateListWidget::changeTemplateFile(int pos)
 
 void TemplateListWidget::showOpacitySlider(int row)
 {
-	auto geometry = template_table->visualRect(template_table->model()->index(row, 0));
+	auto geometry = template_table->visualRect(viewIndex(row, 0));
 	geometry.translate(0, geometry.height());
 	
 	QDialog dialog(nullptr, Qt::FramelessWindowHint);

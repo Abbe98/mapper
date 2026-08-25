@@ -33,6 +33,8 @@ This window is opened by clicking the menu item Templates -&gt; Template Setup W
 
 Each item can be hidden or shown using the check box on the left. Furthermore, layers can be set to transparent by entering an opacity percentage.
 
+Above the list, there is a search field. Entering text there reduces the list to the templates whose filename contains this text, ignoring upper and lower case. The map layer is always shown. Clearing the search field brings back the complete list.
+
 #### Opening templates
 
 Click the button "Open..." in the template setup window and select the file to be loaded as a template. See [types of templates](#template-types) for the list of supported file formats.
@@ -40,6 +42,8 @@ Click the button "Open..." in the template setup window and select the file to b
 #### Changing the template draw order
 
 When a template is selected, it can be moved up and down in the list using the Move Up and Mode Down buttons to change its position in the display order.
+
+Reordering needs the complete list, so the Move Up and Move Down buttons are disabled while the search field is not empty.
 
 #### Deleting or closing templates
 
