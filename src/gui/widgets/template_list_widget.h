@@ -36,6 +36,7 @@ class QBoxLayout;
 class QCheckBox;
 class QEvent;
 class QModelIndex;
+class QPoint;
 class QTableView;
 class QToolButton;
 class QVariant;
@@ -107,6 +108,13 @@ protected:
 	
 	void itemClicked(const QModelIndex& index);
 	void itemDoubleClicked(const QModelIndex& index);
+	
+	/**
+	 * Shows the context menu for the template at the given position.
+	 * 
+	 * The position is given in viewport coordinates of the template table.
+	 */
+	void showContextMenu(const QPoint& pos);
 	
 	/**
 	 * When key events for Qt::Key_Space are sent to the template_table,

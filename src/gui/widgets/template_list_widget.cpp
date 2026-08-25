@@ -36,6 +36,7 @@
 #include <QByteArray>
 #include <QCheckBox>
 #include <QCoreApplication>
+#include <QDesktopServices>
 #include <QDialog>
 #include <QDir>
 #include <QEvent>
@@ -56,6 +57,8 @@
 #include <QModelIndex>
 #include <QPainter>
 #include <QPixmap>
+#include <QPoint>
+#include <QProcess>
 #include <QRect>
 #include <QScroller>
 #include <QSettings>
@@ -69,6 +72,7 @@
 #include <QTableView>
 #include <QTimer>
 #include <QToolButton>
+#include <QUrl>
 #include <QVBoxLayout>
 #include <QVariant>
 #include <QVector>
@@ -121,6 +125,27 @@ QVariant makeCheckBoxDecorator(QStyle* style, const QSize& size)
 	style->drawPrimitive(QStyle::PE_IndicatorViewItemCheck, &option_item, &painter, nullptr);
 	painter.end();
 	return pixmap;
+}
+
+/**
+ * Shows the given file in the file manager of the desktop environment.
+ * 
+ * Where supported, the file itself is selected in the file manager.
+ * Otherwise, the directory which contains the file is opened.
+ */
+void showInFileBrowser(const QString& path)
+{
+	const QFileInfo file_info(path);
+#if defined(Q_OS_WIN)
+	const auto args = QStringList { QString::fromLatin1("/select,"), QDir::toNativeSeparators(file_info.absoluteFilePath()) };
+	if (QProcess::startDetached(QString::fromLatin1("explorer.exe"), args))
+		return;
+#elif defined(Q_OS_MACOS)
+	const auto args = QStringList { QString::fromLatin1("-R"), file_info.absoluteFilePath() };
+	if (QProcess::startDetached(QString::fromLatin1("open"), args))
+		return;
+#endif
+	QDesktopServices::openUrl(QUrl::fromLocalFile(file_info.absolutePath()));
 }
 
 /// Local wrapper for Util::ToolButton::create() adding the What's This bit.
@@ -352,6 +377,11 @@ TemplateListWidget::TemplateListWidget(Map& map, MapView& main_view, MapEditorCo
 	connect(template_table->model(), &QAbstractTableModel::dataChanged, this, &TemplateListWidget::setButtonsDirty);
 	connect(template_table, &QTableView::clicked, this, &TemplateListWidget::itemClicked, Qt::QueuedConnection);
 	connect(template_table, &QTableView::doubleClicked, this, &TemplateListWidget::itemDoubleClicked, Qt::QueuedConnection);
+	if (!mobile_mode)
+	{
+		template_table->setContextMenuPolicy(Qt::CustomContextMenu);
+		connect(template_table, &QWidget::customContextMenuRequested, this, &TemplateListWidget::showContextMenu);
+	}
 	
 	connect(delete_button, &QAbstractButton::clicked, this, &TemplateListWidget::deleteTemplate);
 	connect(move_up_button, &QAbstractButton::clicked, this, &TemplateListWidget::moveTemplateUp);
@@ -573,6 +603,27 @@ void TemplateListWidget::itemDoubleClicked(const QModelIndex& index)
 			changeTemplateFile(pos);
 		}
 	}
+}
+
+void TemplateListWidget::showContextMenu(const QPoint& pos)
+{
+	auto const row = template_table->indexAt(pos).row();
+	if (row < 0)
+		return;
+	
+	auto const template_pos = posFromRow(row);
+	if (template_pos < 0)
+		return;  // The map layer, not a template.
+	
+	auto const* temp = map.getTemplate(template_pos);
+	auto const path = temp->getTemplatePath();
+	if (path.isEmpty())
+		return;
+	
+	QMenu menu(this);
+	auto* show_action = menu.addAction(tr("Show in file browser"), this, [path]() { showInFileBrowser(path); });
+	show_action->setEnabled(QFileInfo::exists(path));
+	menu.exec(template_table->viewport()->mapToGlobal(pos));
 }
 
 bool TemplateListWidget::eventFilter(QObject* watched, QEvent* event)

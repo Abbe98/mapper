@@ -6,7 +6,7 @@ authors:
 keywords: Templates
 parent: Templates and Data
 nav_order: 0.1
-last_modified_date: 13 June 2025
+last_modified_date: 25 August 2026
 ---
 
 Images, tracks recorded with GNSS receivers and other layers which are used to provide base information for the mapper are called templates. They can be loaded into the map file using the template setup window which is available via the menu item Templates -&gt; Template Setup Window. Templates can also be "abused" to display information on the final map, for example sponsor logos which are only available as raster images.
@@ -44,6 +44,10 @@ When a template is selected, it can be moved up and down in the list using the M
 #### Deleting or closing templates
 
 Using the Delete or Close button, templates can be removed. The label text depends on the [corresponding setting](settings.md#templates-keep-settings-of-closed-templates) "Keep settings of closed templates": if it is activated, it will be "Close" and it will be possible to reopen the template later with the menu item Templates -&gt; Reopen template..., otherwise it will be "Delete" and it will not be possible to reopen the template later.
+
+#### Showing a template file in the file browser
+
+Right-click a template in the list and select "Show in file browser" to look up the template's file in the file manager of your desktop environment. Where supported, the file itself will be selected in the file manager, otherwise the folder which contains the file is opened.
 
 #### Positioning
 
